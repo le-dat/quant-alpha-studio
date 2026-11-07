@@ -58,21 +58,25 @@ class OptimizeRequest(BaseModel):
     risk_tolerance: float = Field(default=0.5, description="Hệ số chấp nhận rủi ro q (0.0 đến 1.0)")
     budget_cardinality: int = Field(default=3, description="Số lượng cổ phiếu tối đa trong danh mục")
     include_fundamental_alpha: bool = Field(default=True)
+    use_quantum: bool = Field(default=True)
 
 class AssetAllocation(BaseModel):
     ticker: str
     weight: float
-    shares_allocation: int
+    percentage: float
+    shares_allocation: Optional[int] = 0
 
 class OptimizeResponse(BaseModel):
-    method: str  # "Quantum (QAOA)" hoặc "Classical (Markowitz/SciPy)"
+    method: str  # "Quantum (QAOA / Qiskit Aer)" hoặc "Classical (Markowitz/SciPy SLSQP)"
+    weights: Dict[str, float]
     allocations: List[AssetAllocation]
+    expected_return: float
+    volatility: float
+    sharpe_ratio: float
     expected_return_annual: float
     annual_volatility: float
-    sharpe_ratio: float
     execution_time_seconds: float
     quantum_metadata: Optional[Dict] = None
-
 class BacktestResponse(BaseModel):
     dates: List[str]
     quantum_cumulative_returns: List[float]
@@ -155,8 +159,9 @@ Chuyển đổi bài toán phân bổ danh mục sang dạng toán tử Ising/QU
 ```python
 import numpy as np
 import time
+from typing import List, Dict, Any
 from scipy.optimize import minimize
-from qiskit_aer import AerSimulator
+from qiskit.primitives import StatevectorSampler
 from qiskit_algorithms import QAOA
 from qiskit_algorithms.optimizers import COBYLA
 from qiskit_optimization.problems import QuadraticProgram
@@ -165,13 +170,13 @@ from qiskit_optimization.algorithms import MinimumEigenOptimizer
 class PortfolioOptimizer:
     def __init__(self, tickers: list, expected_returns: np.ndarray, cov_matrix: np.ndarray, risk_factor: float = 0.5):
         self.tickers = tickers
-        self.mu = expected_returns
-        self.sigma = cov_matrix
-        self.q = risk_factor
+        self.mu = np.array(expected_returns, dtype=float)
+        self.sigma = np.array(cov_matrix, dtype=float)
+        self.q = float(risk_factor)
         self.n = len(tickers)
 
     def solve_classical(self) -> dict:
-        """Giải bài toán Markowitz cổ điển bằng SciPy (Continuous weights)"""
+        """Giải bài toán Markowitz cổ điển bằng SciPy SLSQP (Continuous weights)"""
         start_time = time.time()
         
         def objective(w):
@@ -179,37 +184,50 @@ class PortfolioOptimizer:
         
         constraints = ({'type': 'eq', 'fun': lambda w: np.sum(w) - 1.0})
         bounds = tuple((0.0, 1.0) for _ in range(self.n))
-        init_guess = np.ones(self.n) / self.n
+        init_guess = np.ones(self.n) / float(self.n)
         
         res = minimize(objective, init_guess, method='SLSQP', bounds=bounds, constraints=constraints)
-        weights = res.x
+        weights = res.x if res.success else init_guess
+        weights = np.where(weights < 0.001, 0.0, weights)
+        if weights.sum() > 0:
+            weights = weights / weights.sum()
         
-        ann_return = np.sum(self.mu * weights) * 252
-        ann_vol = np.sqrt(np.dot(weights.T, np.dot(self.sigma * 252, weights)))
+        ann_return = float(np.sum(self.mu * weights) * 252)
+        ann_vol = float(np.sqrt(np.dot(weights.T, np.dot(self.sigma * 252, weights))))
         sharpe = ann_return / (ann_vol + 1e-8)
+        exec_time = time.time() - start_time
+        
+        weights_dict = {ticker: round(float(w), 4) for ticker, w in zip(self.tickers, weights)}
+        allocations = [
+            {"ticker": t, "weight": round(float(w), 4), "percentage": round(float(w) * 100, 2), "shares_allocation": int(round(float(w) * 100))}
+            for t, w in zip(self.tickers, weights)
+        ]
         
         return {
-            "method": "Classical (Markowitz/SciPy)",
-            "weights": {ticker: float(round(w, 4)) for ticker, w in zip(self.tickers, weights)},
-            "expected_return": float(ann_return),
-            "volatility": float(ann_vol),
-            "sharpe_ratio": float(sharpe),
-            "exec_time": time.time() - start_time
+            "method": "Classical (Markowitz/SciPy SLSQP)",
+            "weights": weights_dict,
+            "allocations": allocations,
+            "expected_return": round(ann_return, 4),
+            "volatility": round(ann_vol, 4),
+            "sharpe_ratio": round(sharpe, 2),
+            "expected_return_annual": round(ann_return, 4),
+            "annual_volatility": round(ann_vol, 4),
+            "execution_time_seconds": round(exec_time, 4),
+            "quantum_metadata": None
         }
 
     def solve_quantum_qaoa(self, budget_assets: int = 3) -> dict:
         """
-        Mã hóa bài toán thành QUBO và giải bằng thuật toán QAOA trên Qiskit AerSimulator.
+        Mã hóa bài toán thành QUBO và giải bằng thuật toán QAOA trên Qiskit 1.4+ (StatevectorSampler).
         Ràng buộc: Chọn đúng `budget_assets` cổ phiếu (Rời rạc nhị phân x_i in {0, 1}).
         """
         start_time = time.time()
+        k = max(1, min(budget_assets, self.n))
         
         qp = QuadraticProgram("QuantumPortfolioOptimization")
-        # Khai báo biến nhị phân: x_i = 1 (mua cổ phiếu i), 0 (không mua)
         for ticker in self.tickers:
             qp.binary_var(name=ticker)
             
-        # Hàm mục tiêu: min (0.5 * q * x^T * Sigma * x - mu^T * x)
         linear = {ticker: -float(self.mu[i]) for i, ticker in enumerate(self.tickers)}
         quadratic = {}
         for i, t_i in enumerate(self.tickers):
@@ -217,40 +235,47 @@ class PortfolioOptimizer:
                 quadratic[(t_i, t_j)] = float(0.5 * self.q * self.sigma[i, j])
                 
         qp.minimize(linear=linear, quadratic=quadratic)
-        
-        # Ràng buộc ngân sách rời rạc: sum(x_i) == budget_assets
-        qp.linear_constraint(linear={t: 1 for t in self.tickers}, sense="==", rhs=budget_assets, name="budget")
+        qp.linear_constraint(linear={t: 1 for t in self.tickers}, sense="==", rhs=k, name="budget")
 
-        # Khởi tạo mô phỏng lượng tử
-        backend = AerSimulator()
-        optimizer = COBYLA(maxiter=50)
-        qaoa = QAOA(optimizer=optimizer, reps=1, quantum_instance=backend)
+        # Khởi tạo mô phỏng lượng tử bằng Qiskit 1.4+ V2 Primitive
+        sampler = StatevectorSampler()
+        optimizer = COBYLA(maxiter=40)
+        qaoa = QAOA(sampler=sampler, optimizer=optimizer, reps=1)
         min_eigen_solver = MinimumEigenOptimizer(qaoa)
         
-        # Chạy thuật toán lượng tử
         result = min_eigen_solver.solve(qp)
         
-        # Trích xuất vector nghiệm nhị phân
-        selected_binary = [result.variables_dict[t] for t in self.tickers]
+        selected_binary = [float(result.variables_dict[t]) for t in self.tickers]
         sum_selected = sum(selected_binary)
         weights = [float(b / sum_selected) if sum_selected > 0 else 1.0 / self.n for b in selected_binary]
         
-        w_arr = np.array(weights)
-        ann_return = np.sum(self.mu * w_arr) * 252
-        ann_vol = np.sqrt(np.dot(w_arr.T, np.dot(self.sigma * 252, w_arr)))
+        w_arr = np.array(weights, dtype=float)
+        ann_return = float(np.sum(self.mu * w_arr) * 252)
+        ann_vol = float(np.sqrt(np.dot(w_arr.T, np.dot(self.sigma * 252, w_arr))))
         sharpe = ann_return / (ann_vol + 1e-8)
+        exec_time = time.time() - start_time
+        
+        weights_dict = {ticker: round(float(w), 4) for ticker, w in zip(self.tickers, weights)}
+        allocations = [
+            {"ticker": t, "weight": round(float(w), 4), "percentage": round(float(w) * 100, 2), "shares_allocation": int(round(float(w) * 100))}
+            for t, w in zip(self.tickers, weights)
+        ]
         
         return {
-            "method": "Quantum (QAOA / Qiskit)",
-            "weights": {ticker: float(round(w, 4)) for ticker, w in zip(self.tickers, weights)},
-            "expected_return": float(ann_return),
-            "volatility": float(ann_vol),
-            "sharpe_ratio": float(sharpe),
-            "exec_time": time.time() - start_time,
+            "method": "Quantum (QAOA / Qiskit Aer)",
+            "weights": weights_dict,
+            "allocations": allocations,
+            "expected_return": round(ann_return, 4),
+            "volatility": round(ann_vol, 4),
+            "sharpe_ratio": round(sharpe, 2),
+            "expected_return_annual": round(ann_return, 4),
+            "annual_volatility": round(ann_vol, 4),
+            "execution_time_seconds": round(exec_time, 4),
             "quantum_metadata": {
                 "num_qubits": self.n,
-                "optimal_energy": float(result.fval),
-                "solver": "AerSimulator QAOA"
+                "optimal_energy": round(float(result.fval), 6),
+                "solver": "Qiskit 1.4 StatevectorSampler QAOA",
+                "budget_cardinality": k
             }
         }
 ```
@@ -323,7 +348,77 @@ class QuantAlphaEngine:
 
 ---
 
-## 6. Khởi tạo FastAPI Application (`app/main.py`)
+## 6. Định nghĩa REST API Endpoints (`app/api/endpoints.py`)
+
+Router FastAPI kết nối AI BCTC Analyzer, Quant Alpha Engine và Quantum Solver:
+
+```python
+from fastapi import APIRouter, HTTPException, UploadFile, File, Form
+from typing import Optional, List
+from app.models.schemas import (
+    BCTCAnalysisRequest,
+    BCTCAnalysisResponse,
+    OptimizeRequest,
+    OptimizeResponse,
+    BacktestRequest,
+    BacktestResponse,
+)
+from app.ai.bctc_analyzer import FinancialStatementAnalyzer
+from app.quant.alpha_engine import QuantAlphaEngine
+from app.quantum.portfolio_optimizer import PortfolioOptimizer
+
+router = APIRouter()
+analyzer = FinancialStatementAnalyzer()
+
+@router.post("/analyze-report", response_model=BCTCAnalysisResponse)
+async def analyze_report(payload: Optional[BCTCAnalysisRequest] = None):
+    ticker = payload.ticker if payload else "NVDA"
+    custom_text = payload.custom_text if payload and payload.custom_text else ""
+    score, sentiment, metrics, insights = analyzer.analyze_ticker_financials(ticker, custom_text)
+    return BCTCAnalysisResponse(
+        ticker=ticker.upper(),
+        fundamental_score=score,
+        sentiment_score=sentiment,
+        key_metrics=metrics,
+        summary_insights=insights
+    )
+
+@router.post("/optimize", response_model=OptimizeResponse)
+async def optimize_portfolio(request: OptimizeRequest):
+    clean_tickers = [t.strip().upper() for t in request.tickers if t.strip()]
+    if not clean_tickers:
+        clean_tickers = ["AAPL", "MSFT", "GOOGL", "AMZN", "NVDA"]
+
+    mu, sigma, returns_df = QuantAlphaEngine.get_market_data(clean_tickers, period=request.period)
+
+    if request.include_fundamental_alpha:
+        scores = [analyzer.analyze_ticker_financials(t)[0] for t in clean_tickers]
+        mu = QuantAlphaEngine.combine_with_fundamental_alpha(mu, scores, weight_alpha=0.35)
+
+    optimizer = PortfolioOptimizer(clean_tickers, mu, sigma, request.risk_tolerance)
+    if request.use_quantum:
+        result = optimizer.solve_quantum_qaoa(budget_assets=request.budget_cardinality)
+    else:
+        result = optimizer.solve_classical()
+
+    return OptimizeResponse(**result)
+
+@router.post("/backtest", response_model=BacktestResponse)
+async def backtest_portfolio(request: BacktestRequest):
+    clean_tickers = [t.strip().upper() for t in request.tickers if t.strip()]
+    mu, sigma, returns_df = QuantAlphaEngine.get_market_data(clean_tickers, period=request.period)
+
+    opt = PortfolioOptimizer(clean_tickers, mu, sigma, risk_factor=0.5)
+    c_weights = request.classical_weights or opt.solve_classical()["weights"]
+    q_weights = request.quantum_weights or opt.solve_quantum_qaoa(budget_assets=min(3, len(clean_tickers)))["weights"]
+
+    backtest_data = QuantAlphaEngine.run_backtest(returns_df, q_weights, c_weights)
+    return BacktestResponse(**backtest_data)
+```
+
+---
+
+## 7. Khởi tạo FastAPI Application (`app/main.py`)
 
 ```python
 from fastapi import FastAPI

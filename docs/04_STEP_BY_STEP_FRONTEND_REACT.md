@@ -339,3 +339,96 @@ export default function BacktestChart({ backtestData }) {
   );
 }
 ```
+---
+
+## 6. Component Thanh Điều Hướng & Trạng Thái (`src/components/Navbar.jsx`)
+
+```jsx
+import React, { useState, useEffect } from 'react';
+import { Atom, Cpu, Activity, ShieldCheck, BookOpen } from 'lucide-react';
+import { checkHealth } from '../api/client';
+
+export default function Navbar({ activeTab, setActiveTab }) {
+  const [apiOnline, setApiOnline] = useState(null);
+
+  useEffect(() => {
+    const testConnection = async () => {
+      try {
+        await checkHealth();
+        setApiOnline(true);
+      } catch {
+        setApiOnline(false);
+      }
+    };
+    testConnection();
+  }, []);
+
+  return (
+    <header className="border-b border-slate-800 bg-slate-950/80 backdrop-blur-md sticky top-0 z-50">
+      <div className="max-w-7xl mx-auto px-4 h-16 flex items-center justify-between">
+        <div className="flex items-center gap-3">
+          <Atom className="w-6 h-6 text-sky-400 animate-spin" style={{ animationDuration: '12s' }} />
+          <span className="font-bold text-lg text-white">QuantumAlpha <span className="text-xs text-indigo-400">Studio</span></span>
+        </div>
+        <nav className="flex bg-slate-900 p-1 rounded-xl text-xs">
+          <button onClick={() => setActiveTab('all')} className={`px-3 py-1.5 rounded-lg ${activeTab === 'all' ? 'bg-sky-500 text-slate-950 font-bold' : 'text-slate-400'}`}>Tổng quan</button>
+          <button onClick={() => setActiveTab('scanner')} className={`px-3 py-1.5 rounded-lg ${activeTab === 'scanner' ? 'bg-sky-500 text-slate-950 font-bold' : 'text-slate-400'}`}>BCTC Scanner</button>
+          <button onClick={() => setActiveTab('optimizer')} className={`px-3 py-1.5 rounded-lg ${activeTab === 'optimizer' ? 'bg-sky-500 text-slate-950 font-bold' : 'text-slate-400'}`}>Quantum Solver</button>
+          <button onClick={() => setActiveTab('backtest')} className={`px-3 py-1.5 rounded-lg ${activeTab === 'backtest' ? 'bg-sky-500 text-slate-950 font-bold' : 'text-slate-400'}`}>Backtest</button>
+        </nav>
+        <span className={`text-xs px-2.5 py-1 rounded-full ${apiOnline ? 'bg-emerald-500/10 text-emerald-400' : 'bg-rose-500/10 text-rose-400'}`}>
+          {apiOnline ? '● Backend Ready' : '○ Offline'}
+        </span>
+      </div>
+    </header>
+  );
+}
+```
+
+---
+
+## 7. Component Trung Tâm Điều Phối Trạng Thái (`src/App.jsx`)
+
+```jsx
+import React, { useState, useEffect } from 'react';
+import Navbar from './components/Navbar';
+import BCTCScanner from './components/BCTCScanner';
+import QuantumOptimizer from './components/QuantumOptimizer';
+import BacktestChart from './components/BacktestChart';
+import { runOptimization, fetchBacktest } from './api/client';
+
+export default function App() {
+  const [activeTab, setActiveTab] = useState('all');
+  const [optimizationResult, setOptimizationResult] = useState(null);
+  const [backtestResult, setBacktestResult] = useState(null);
+  const [loading, setLoading] = useState(false);
+
+  const handleOptimize = async (params) => {
+    setLoading(true);
+    try {
+      const data = await runOptimization(params);
+      setOptimizationResult(data);
+      const bt = await fetchBacktest({
+        tickers: params.tickers,
+        [params.use_quantum ? 'quantum_weights' : 'classical_weights']: data.weights
+      });
+      setBacktestResult(bt);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="min-h-screen bg-[#070b14] text-slate-100">
+      <Navbar activeTab={activeTab} setActiveTab={setActiveTab} />
+      <main className="max-w-7xl mx-auto p-6 space-y-6">
+        {(activeTab === 'all' || activeTab === 'scanner') && <BCTCScanner />}
+        {(activeTab === 'all' || activeTab === 'optimizer') && (
+          <QuantumOptimizer onRunOptimization={handleOptimize} optimizationData={optimizationResult} loading={loading} />
+        )}
+        {(activeTab === 'all' || activeTab === 'backtest') && <BacktestChart backtestData={backtestResult} />}
+      </main>
+    </div>
+  );
+}
+```

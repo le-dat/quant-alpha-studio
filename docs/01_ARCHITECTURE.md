@@ -75,7 +75,7 @@ Thuật toán **QAOA (Quantum Approximate Optimization Algorithm)** sử dụng 
 * **Chức năng**:
   * Khởi tạo bài toán tối ưu thông qua `qiskit_optimization.problems.QuadraticProgram`.
   * Chuyển bài toán thành toán tử Ising Hamilton: $H = \sum C_{ij} Z_i Z_j + \sum D_i Z_i$.
-  * Chạy thuật toán **QAOA** với bộ tối ưu cổ điển **COBYLA** trên **Qiskit AerSimulator**.
+  * Chạy thuật toán **QAOA** với bộ tối ưu cổ điển **COBYLA** trên **Qiskit 1.4+ Primitives (StatevectorSampler / AerSimulator)**.
   * Giải mã trạng thái xác suất cao nhất (Bitstring) thành tỷ trọng danh mục cụ thể ($w_1, w_2, ..., w_N$).
 
 ### Component 4: FastAPI REST API (`backend/app/api/`)

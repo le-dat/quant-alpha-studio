@@ -8,16 +8,17 @@ Tài liệu này hướng dẫn cách đóng gói ứng dụng bằng Docker, tr
 
 ### 1.1. Dockerfile cho Backend (`backend/Dockerfile`)
 ```dockerfile
-FROM python:3.10-slim
+FROM python:3.12-slim
 
 WORKDIR /app
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
+    curl \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
-RUN pip install --no-cache-dir --upgrade pip && \
+RUN pip install --no-cache-dir --upgrade pip setuptools wheel && \
     pip install --no-cache-dir -r requirements.txt
 
 COPY . .
@@ -28,8 +29,12 @@ CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
 
 ### 1.2. Dockerfile cho Frontend (`frontend/Dockerfile`)
 ```dockerfile
-FROM node:20-alpine AS build
+FROM node:22-alpine AS build
 WORKDIR /app
+
+ARG VITE_API_URL=http://localhost:8000/api/v1
+ENV VITE_API_URL=$VITE_API_URL
+
 COPY package*.json ./
 RUN npm install
 COPY . .
@@ -40,7 +45,6 @@ COPY --from=build /app/dist /usr/share/nginx/html
 EXPOSE 80
 CMD ["nginx", "-g", "daemon off;"]
 ```
-
 ### 1.3. `docker-compose.yml` (Chạy toàn bộ hệ thống bằng 1 lệnh)
 Đặt tại thư mục gốc của dự án:
 ```yaml

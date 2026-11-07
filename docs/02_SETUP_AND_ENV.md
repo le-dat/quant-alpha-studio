@@ -7,8 +7,8 @@ Tài liệu này hướng dẫn chuẩn bị môi trường phát triển đầy
 ## 1. Yêu cầu Hệ thống (Prerequisites)
 
 * **Hệ điều hành**: Linux / macOS / Windows (WSL2 khuyến nghị cho Windows).
-* **Python**: Phiên bản `>= 3.10` và `< 3.12` (Qiskit hoạt động ổn định nhất trên Python 3.10 hoặc 3.11).
-* **Node.js**: Phiên bản `>= 18.x` hoặc `20.x` kèm theo `npm` hoặc `pnpm`.
+* **Python**: Phiên bản `>= 3.10` và `<= 3.12` (Qiskit 1.4+ hoạt động ổn định nhất trên Python 3.11 hoặc 3.12).
+* **Node.js**: Phiên bản `>= 18.x`, `20.x` hoặc `22.x` kèm theo `npm` hoặc `pnpm`.
 * **Git**: Đã cài đặt để quản lý phiên bản mã nguồn.
 
 ---
@@ -17,7 +17,7 @@ Tài liệu này hướng dẫn chuẩn bị môi trường phát triển đầy
 
 ### 2.1. Tạo cấu trúc thư mục Backend
 ```bash
-cd /home/verno/Desktop/learn/quantum-alpha-studio
+cd /home/verno/projects/personal/learn/quantum-alpha-studio
 mkdir -p backend/app/{api,ai,quant,quantum,models,services}
 ```
 
@@ -49,8 +49,8 @@ pandas>=2.0.0
 yfinance>=0.2.36
 scipy>=1.11.0
 
-# Quantum Computing (IBM Qiskit)
-qiskit>=1.0.0
+# Quantum Computing (IBM Qiskit 1.4+)
+qiskit>=1.0.0,<2.0.0
 qiskit-aer>=0.14.0
 qiskit-algorithms>=0.3.0
 qiskit-optimization>=0.6.0
@@ -58,12 +58,11 @@ qiskit-optimization>=0.6.0
 # AI & Document Processing
 pypdf>=4.0.0
 google-generativeai>=0.4.0
-transformers>=4.38.0
-torch>=2.1.0 --extra-index-url https://download.pytorch.org/whl/cpu
 
-# Utilities
+# Utilities & HTTP Test
 python-dotenv>=1.0.1
 requests>=2.31.0
+httpx>=0.27.0
 ```
 
 Cài đặt bằng lệnh:
@@ -93,7 +92,7 @@ IBM_QUANTUM_TOKEN=""
 
 ### 3.1. Khởi tạo dự án Vite React
 ```bash
-cd /home/verno/Desktop/learn/quantum-alpha-studio
+cd /home/verno/projects/personal/learn/quantum-alpha-studio
 npm create vite@latest frontend -- --template react
 ```
 
